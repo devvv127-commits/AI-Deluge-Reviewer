@@ -59,7 +59,7 @@ def review_script(script):
         temperature=0.2
     )
 
-    def review_script(script):
+def review_script(script):
 
     with tracer.start_as_current_span("ai-deluge-review"):
 
