@@ -1,7 +1,10 @@
 from groq import Groq
 from dotenv import load_dotenv
 from pathlib import Path
+from monitoring import tracer
 import os
+import time
+
 
 # Load .env
 env_path = Path(__file__).resolve().parent.parent / ".env"
@@ -22,6 +25,7 @@ print("✓ Groq API Key loaded successfully")
 
 # Client
 client = Groq(api_key=api_key)
+
 
 def review_script(script):
 
@@ -54,5 +58,17 @@ def review_script(script):
         ],
         temperature=0.2
     )
+
+    def review_script(script):
+
+    with tracer.start_as_current_span("ai-deluge-review"):
+
+        start = time.time()
+
+        # AI logic here
+
+        duration = time.time() - start
+
+        print(f"Review completed in {duration} seconds")
 
     return response.choices[0].message.content
