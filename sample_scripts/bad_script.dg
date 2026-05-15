@@ -1,305 +1,414 @@
-string standalone.CallRecordCreate(String crmAPIRequest)
+string standalone.ReturnLeadDetailOnCall(String crmAPIRequest)
 {
-respMap = Map();
+ORG_ID = "org60043206528";
+LEAD_CANVAS_ID = "973060000000717144";
+CONTACT_CANVAS_ID = "973060000000496941";
+details = Map();
+// --- Unwrap request ---
+req = Map();
 try 
 {
-	// =========================
-	// 1) Parse wrapper payload
-	// =========================
-	if(crmAPIRequest == null || crmAPIRequest == "")
-	{
-		respMap.put("status","error");
-		respMap.put("message","Empty request payload");
-		return respMap.toString();
-	}
-	reqdata = Map();
-	request_body = Map();
+	req = ifnull(crmAPIRequest,"{}").toMap();
+	bodyRaw = ifnull(req.get("body"),"{}");
+}
+catch (e)
+{
+	err = Map();
+	err.put("code","error");
+	err.put("message","Invalid wrapper payload");
+	err.put("details",{"output_type":"string"});
+	return err.toString();
+}
+// --- Parse JSON body ---
+params = Map();
+try 
+{
+	params = ifnull(bodyRaw,"{}").toMap();
+}
+catch (e)
+{
+	err = Map();
+	err.put("code","error");
+	err.put("message","Body parse error: " + e.toString());
+	err.put("details",{"output_type":"string"});
+	return err.toString();
+}
+// --- Inputs ---
+mobile = ifnull(params.get("mobile"),"").trim();
+callType = ifnull(params.get("type"),"").trim();
+ownerEmail = ifnull(params.get("userEmail"),"").trim();
+campaignID = ifnull(params.get("campaignID"),"").trim();
+// recordID input is no longer used — Path A (direct recordID lookup) has been commented out
+// recordID = ifnull(params.get("recordID"),"").trim();
+// --- Resolve ownerID from ownerEmail (via COQL) ---
+ownerID = null;
+if(ownerEmail != "")
+{
 	try 
 	{
-		reqdata = crmAPIRequest.toMap();
+		coqlBodyUser = Map();
+		userQuery = "select id from users where email = '" + ownerEmail + "' limit 1";
+		coqlBodyUser.put("select_query",userQuery);
+		getUserInfo = invokeapi
+		[
+			service :zohocrm
+			path :"crm/v7/coql"
+			type :POST
+			body:coqlBodyUser.toString()
+		];
+		usersData = ifnull(getUserInfo.get("data"),List());
+		if(usersData != null && !usersData.isEmpty())
+		{
+			ownerID = ifnull(usersData.get(0).get("id"),null);
+		}
 	}
-	catch (e0)
+	catch (eU)
 	{
-		respMap.put("status","error");
-		respMap.put("message","Invalid wrapper JSON");
-		respMap.put("details","toMap error: " + e0.toString());
-		return respMap.toString();
+		info "[OWNER LOOKUP] Error: " + eU.toString();
+		ownerID = null;
 	}
-	bodyRaw = reqdata.get("body");
-	if(bodyRaw == null)
+	if(ownerID == null)
 	{
-		respMap.put("status","error");
-		respMap.put("message","Missing 'body' in request");
-		return respMap.toString();
+		info "[OWNER LOOKUP] No user found for email: " + ownerEmail;
+		responseMap = Map();
+		responseMap.put("Error","No User Found");
+		responseMap.put("Code",404);
+		return responseMap.toString();
 	}
+}
+// --- Fetch Business Unit from Lead_Campaign via campaignID ---
+businessUnit = "";
+if(campaignID != "")
+{
 	try 
 	{
-		request_body = bodyRaw.toMap();
-	}
-	catch (eBody)
-	{
-		respMap.put("status","error");
-		respMap.put("message","Invalid 'body' JSON");
-		respMap.put("details","body.toMap error: " + eBody.toString());
-		return respMap.toString();
-	}
-	// =========================
-	// 2) Extract fields
-	// =========================
-	StartTime = ifnull(request_body.get("StartTime"),"");
-	EndTime = ifnull(request_body.get("EndTime"),"");
-	domainID = ifnull(request_body.get("DomainId"),"");
-	SourceNumber = ifnull(request_body.get("SourceNumber"),"").trim();
-	DestinationNumber = ifnull(request_body.get("DestinationNumber"),"").trim();
-	CallDuration = ifnull(request_body.get("CallDuration"),"");
-	Status = ifnull(request_body.get("Status"),"");
-	ResourceURL = ifnull(request_body.get("ResourceURL"),"");
-	Direction = ifnull(request_body.get("Direction"),"");
-	CallNotes = ifnull(request_body.get("CallNotes"),"");
-	AgentName = ifnull(request_body.get("AgentName"),"");
-	OpportunityId = ifnull(request_body.get("OpportunityId"),"");
-	CampaignId = ifnull(request_body.get("campaign_id"),"");
-	CampaignName = ifnull(request_body.get("campaign_name"),"");
-	Custom10 = ifnull(request_body.get("mx_Custom_10"),"");
-	// =========================
-	// 3) Normalize phone numbers
-	// =========================
-	if(SourceNumber != "")
-	{
-		SourceNumber = SourceNumber.replaceAll("[^0-9]","");
-		if(SourceNumber.length() > 10)
+		coqlBodyCamp = Map();
+		campQuery = "select Business_Unit from Lead_Campaign where Campaign_ID = '" + campaignID + "' limit 1";
+		coqlBodyCamp.put("select_query",campQuery);
+		campaignResp = invokeapi
+		[
+			service :zohocrm
+			path :"crm/v7/coql"
+			type :POST
+			body:coqlBodyCamp.toString()
+		];
+		campData = ifnull(campaignResp.get("data"),List());
+		if(campData != null && !campData.isEmpty())
 		{
-			SourceNumber = SourceNumber.right(10);
+			businessUnit = ifnull(campData.get(0).get("Business_Unit"),"");
 		}
 	}
-	if(DestinationNumber != "")
+	catch (e)
 	{
-		DestinationNumber = DestinationNumber.replaceAll("[^0-9]","");
-		if(DestinationNumber.length() > 10)
-		{
-			DestinationNumber = DestinationNumber.right(10);
-		}
+		businessUnit = "";
+		info "[CAMPAIGN LOOKUP] Error: " + e.toString();
 	}
-	if(SourceNumber == "" && DestinationNumber == "")
-	{
-		respMap.put("status","error");
-		respMap.put("message","SourceNumber and DestinationNumber both empty after normalization");
-		return respMap.toString();
-	}
-	// =========================
-	// 4) Convert StartTime to ISO
-	// =========================
-	StartTimeISO = "";
-	try 
-	{
-		if(StartTime != "")
-		{
-			startDT = StartTime.toDateTime("yyyy-MM-dd HH:mm:ss");
-			StartTimeISO = startDT.toString("yyyy-MM-dd'T'HH:mm:ssXXX");
-		}
-	}
-	catch (e1)
-	{
-		// keep StartTimeISO empty
-	}
-	if(StartTimeISO == "")
-	{
-		respMap.put("status","error");
-		respMap.put("message","Invalid StartTime; unable to parse to ISO");
-		return respMap.toString();
-	}
-	// EndTime parse (optional; not used for match)
-	if(EndTime != "")
+}
+found = false;
+entityType = "";
+recordId = "";
+ownerEmailFound = null;
+userTeam = null;
+recordUrl = null;
+// -------------------------------------------------------
+// PATH A: recordID direct lookup — COMMENTED OUT
+// Now always using PATH B (COQL search by mobile + businessUnit)
+// -------------------------------------------------------
+/*
+if(recordID != "")
+{
+	// --- Step 1A: Try fetching recordID as a Contact ---
+	if(businessUnit != "")
 	{
 		try 
 		{
-			endDT = EndTime.toDateTime("yyyy-MM-dd HH:mm:ss");
-		}
-		catch (e2)
-		{
-		}
-	}
-	// =========================
-	// 5) Resolve Who_Id / What_Id (via OpportunityId)
-	// =========================
-	WhoId = null;
-	WhatId = null;
-	callData = Map();
-	relatedType = "";
-	relatedSource = "";
-	if(OpportunityId != "")
-	{
-		oppIdStr = OpportunityId;
-		// Try Contact
-		try 
-		{
-			contactRec = zoho.crm.getRecordById("Contacts",oppIdStr.toLong());
-			if(contactRec != null && !contactRec.isEmpty())
+			contactFetched = zoho.crm.getRecordById("Contacts",recordID);
+			if(contactFetched != null && contactFetched.get("id") != null)
 			{
-				WhoId = contactRec.getJSON("id");
-				callData.put("$se_module","Contacts");
-				relatedType = "Contact";
-				relatedSource = "OpportunityId";
+				recordId = contactFetched.get("id").toString();
+				entityType = "Contact";
+				found = true;
+				contactOwner = contactFetched.get("Owner");
+				if(contactOwner != null)
+				{
+					contactOwnerId = ifnull(contactOwner.get("id"),null).toString();
+					if(ownerID != null && contactOwnerId != null && contactOwnerId != ownerID)
+					{
+						linkRecord = {"Sharing_To":{"id":ownerID},"userlookup221_22":{"id":recordId}};
+						zoho.crm.createRecord("Contacts_X_Users",linkRecord);
+					}
+					try 
+					{
+						ownerInformation = zoho.crm.getRecordById("users",contactOwnerId);
+						ownerEmailFound = ownerInformation.get("users").getJSON("email");
+					}
+					catch (e)
+					{
+						info "[PATH A - Contact] Error fetching owner email: " + e.toString();
+						ownerEmailFound = null;
+					}
+					userMaster = zoho.crm.searchRecords("User_Masters","User_CRM_ID:equals:" + contactOwnerId);
+					userTeam = ifNull(userMaster.get(0).getJSON("Team"),null);
+				}
+				recordUrl = "https://crmplus.zoho.in/motilaloswalamc/index.do/cxapp/crm/" + ORG_ID + "/tab/Contacts/" + recordId + "/canvas/" + CONTACT_CANVAS_ID;
 			}
 		}
-		catch (eC)
+		catch (e)
 		{
+			info "[PATH A - Contact] Lookup failed: " + e.toString();
 		}
-		// If not Contact, try Lead
-		if(WhoId == null)
+	}
+	// --- Step 2A: If not a Contact, try fetching recordID as a Lead ---
+	if(!found)
+	{
+		try 
 		{
-			try 
+			leadFetched = zoho.crm.getRecordById("Leads",recordID);
+			if(leadFetched != null && leadFetched.get("id") != null)
 			{
-				leadRec = zoho.crm.getRecordById("Leads",oppIdStr.toLong());
-				if(leadRec != null && !leadRec.isEmpty())
+				recordId = leadFetched.get("id").toString();
+				entityType = "Lead";
+				found = true;
+				leadOwner = leadFetched.get("Owner");
+				if(leadOwner != null)
 				{
-					WhatId = leadRec.getJSON("id");
-					callData.put("$se_module","Leads");
-					relatedType = "Lead";
-					relatedSource = "OpportunityId";
+					leadOwnerId = leadOwner.get("id").toString();
+					if(ownerID != null && leadOwnerId != ownerID)
+					{
+						linkRecord = {"Sharing_To":{"id":ownerID},"userlookup221_21":{"id":recordId}};
+						createShare = zoho.crm.createRecord("Leads_X_Users",linkRecord);
+						nowTime = zoho.currenttime;
+						addedtime = nowTime.addMinutes(30);
+						nextActionIso = addedtime.toString("yyyy-MM-dd'T'HH:mm:ss");
+						zoho.crm.updateRecord("Leads",recordId,{"Revoke_Again":nextActionIso},{"trigger":{"workflow"}});
+					}
+					try 
+					{
+						ownerInformation = zoho.crm.getRecordById("users",leadOwnerId);
+						ownerEmailFound = ownerInformation.get("users").getJSON("email");
+					}
+					catch (e)
+					{
+						info "[PATH A - Lead] Error fetching owner email: " + e.toString();
+						ownerEmailFound = null;
+					}
+				}
+				userTeam = ifnull(leadFetched.get("Team"),null);
+				recordUrl = "https://crmplus.zoho.in/motilaloswalamc/index.do/cxapp/crm/" + ORG_ID + "/tab/Leads/" + recordId + "/canvas/" + LEAD_CANVAS_ID;
+			}
+		}
+		catch (e)
+		{
+			info "[PATH A - Lead] Lookup failed: " + e.toString();
+		}
+	}
+}
+*/
+// -------------------------------------------------------
+// PATH B: COQL search by mobile (+ businessUnit if available)
+// businessUnit filter is applied only when it is non-empty;
+// if campaignID was not provided (or did not resolve), the
+// search falls back to mobile-only so no record is missed.
+// -------------------------------------------------------
+// --- Step 1B: Search Contacts by mobile (+ BU if present) via COQL ---
+if(!found && mobile != "")
+{
+	try 
+	{
+		// Build WHERE clause — include Business_Unit filter only when resolved
+		contactWhereClause = "Mobile = '" + mobile + "'";
+		if(businessUnit != "")
+		{
+			contactWhereClause = contactWhereClause + " and Business_Unit = '" + businessUnit + "'";
+		}
+		contactQuery = "select id, Owner from Contacts where " + contactWhereClause + " limit 1";
+		coqlBodyContacts = Map();
+		coqlBodyContacts.put("select_query",contactQuery);
+		contactsResp = invokeapi
+		[
+			service :zohocrm
+			path :"crm/v7/coql"
+			type :POST
+			body:coqlBodyContacts.toString()
+		];
+		contactsList = ifnull(contactsResp.get("data"),List());
+		if(contactsList != null && !contactsList.isEmpty())
+		{
+			contact = contactsList.get(0);
+			recordId = contact.get("id").toString();
+			entityType = "Contact";
+			found = true;
+			contactOwner = contact.get("Owner");
+			if(contactOwner != null)
+			{
+				contactOwnerId = ifnull(contactOwner.get("id"),null).toString();
+				if(ownerID != null && contactOwnerId != null && contactOwnerId != ownerID)
+				{
+					linkRecord = {"Sharing_To":{"id":ownerID},"userlookup221_22":{"id":recordId}};
+					zoho.crm.createRecord("Contacts_X_Users",linkRecord);
+				}
+				try 
+				{
+					ownerInformation = zoho.crm.getRecordById("users",contactOwnerId);
+					ownerEmailFound = ownerInformation.get("users").getJSON("email");
+				}
+				catch (e)
+				{
+					info "[PATH B - Contact] Error fetching owner email: " + e.toString();
+					ownerEmailFound = null;
+				}
+				userMaster = zoho.crm.searchRecords("User_Masters","User_CRM_ID:equals:" + contactOwnerId);
+				userTeam = ifNull(userMaster.get(0).getJSON("Team"),null);
+			}
+			recordUrl = "https://crmplus.zoho.in/motilaloswalamc/index.do/cxapp/crm/" + ORG_ID + "/tab/Contacts/" + recordId + "/canvas/" + CONTACT_CANVAS_ID;
+		}
+	}
+	catch (e)
+	{
+		info "[PATH B - Contact] COQL search failed: " + e.toString();
+	}
+}
+// --- Step 2B: If no Contact found, search Leads by mobile (+ BU if present) via COQL ---
+if(!found && mobile != "")
+{
+	try 
+	{
+		// Build WHERE clause — include Business_Unit filter only when resolved
+		leadWhereClause = "Mobile = '" + mobile + "'";
+		if(businessUnit != "")
+		{
+			leadWhereClause = leadWhereClause + " and Business_Unit = '" + businessUnit + "'";
+		}
+		leadSelectQuery = "select id, Owner, Team from Leads where " + leadWhereClause + " limit 1";
+		coqlBodyLeads = Map();
+		coqlBodyLeads.put("select_query",leadSelectQuery);
+		leadsResp = invokeapi
+		[
+			service :zohocrm
+			path :"crm/v7/coql"
+			type :POST
+			body:coqlBodyLeads.toString()
+		];
+		leadsList = ifnull(leadsResp.get("data"),List());
+		if(leadsList != null && !leadsList.isEmpty())
+		{
+			lead = leadsList.get(0);
+			recordId = lead.get("id").toString();
+			entityType = "Lead";
+			found = true;
+			leadOwner = lead.get("Owner");
+			if(leadOwner != null)
+			{
+				leadOwnerId = leadOwner.get("id").toString();
+				if(ownerID != null && leadOwnerId != ownerID)
+				{
+					linkRecord = {"Sharing_To":{"id":ownerID},"userlookup221_21":{"id":recordId}};
+					createShare = zoho.crm.createRecord("Leads_X_Users",linkRecord);
+					nowTime = zoho.currenttime;
+					addedtime = nowTime.addMinutes(30);
+					nextActionIso = addedtime.toString("yyyy-MM-dd'T'HH:mm:ss");
+					zoho.crm.updateRecord("Leads",recordId,{"Revoke_Again":nextActionIso},{"trigger":{"workflow"}});
+				}
+				try 
+				{
+					ownerInformation = zoho.crm.getRecordById("users",leadOwnerId);
+					ownerEmailFound = ownerInformation.get("users").getJSON("email");
+				}
+				catch (e)
+				{
+					info "[PATH B - Lead] Error fetching owner email: " + e.toString();
+					ownerEmailFound = null;
 				}
 			}
-			catch (eL)
-			{
-			}
+			userTeam = ifnull(lead.get("Team"),null);
+			recordUrl = "https://crmplus.zoho.in/motilaloswalamc/index.do/cxapp/crm/" + ORG_ID + "/tab/Leads/" + recordId + "/canvas/" + LEAD_CANVAS_ID;
 		}
 	}
-	// =========================
-	// 6) System_Disposition based on Call Duration
-	// =========================
-	callduration = CallDuration.toString();
-	SystemDisposition = "Not Connected";
-	if(CallDuration != "" && CallDuration != null)
+	catch (e)
 	{
-		if(Status.equalsIgnoreCase("Voice mail"))
-		{
-			SystemDisposition = "Not Connected";
-		}
-		durationStr = CallDuration.toString().trim();
-		if(durationStr.contains(":"))
-		{
-			durationParts = durationStr.toList(":");
-			totalSeconds = 0;
-			if(durationParts.size() == 3)
-			{
-				totalSeconds = durationParts.get(0).toLong() * 3600 + durationParts.get(1).toLong() * 60 + durationParts.get(2).toLong();
-			}
-			else if(durationParts.size() == 2)
-			{
-				totalSeconds = durationParts.get(0).toLong() * 60 + durationParts.get(1).toLong();
-			}
-			if(totalSeconds > 0)
-			{
-				SystemDisposition = "Connected";
-			}
-		}
-		else
-		{
-			// Plain numeric seconds
-			if(durationStr.toLong() > 0)
-			{
-				SystemDisposition = "Connected";
-			}
-		}
+		info "[PATH B - Lead] COQL search failed: " + e.toString();
 	}
-	// =========================
-	// Override: If Call Status is "Not Connected", force SystemDisposition
-	// =========================
-	if(Status.equalsIgnoreCase("Not Connected"))
-	{
-		SystemDisposition = "Not Connected";
-	}
-	// =========================
-	// 7) Build Calls record data
-	// =========================
-	user = zoho.crm.searchRecords("users","(email:equals:" + AgentName + ")").get("users").get(0);
-	bu = user.get("Business_Unit");
-	callData.put("From_Number__s",SourceNumber);
-	callData.put("To_Number__s",DestinationNumber);
-	callData.put("Call_Type",Direction);
-	callData.put("Call_Start_Time",StartTimeISO);
-	callData.put("Agami_Call_Status",Status);
-	callData.put("Outgoing_Call_Status","Completed");
-	callData.put("Call_Duration",callduration);
-	callData.put("Voice_Recording__s",ResourceURL);
-	callData.put("Subject",Direction + " Call from " + SourceNumber);
-	callData.put("Campaign_Name",CampaignName);
-	callData.put("Description",Custom10);
-	callData.put("Call_uuid",domainID);
-	callData.put("Agami_Notes",CallNotes);
-	callData.put("Business_Unit",bu);
-	callData.put("Campaign_Id",CampaignId);
-	callData.put("System_Disposition",SystemDisposition);
-	if(AgentName != "")
-	{
-		userinfo = zoho.crm.searchRecords("users","(email:equals:" + AgentName + ")").get("users").get(0);
-		userid = userinfo.get("id");
-		callData.put("Owner",userid);
-	}
-	callData.put("Call_Source","Dialler");
-	if(WhoId != null)
-	{
-		callData.put("Who_Id",{"id":WhoId});
-	}
-	if(WhatId != null)
-	{
-		callData.put("What_Id",{"id":WhatId});
-	}
-	// =========================
-	// 8) CREATE Call record
-	// =========================
-	dataList = List();
-	dataList.add(callData);
-	pushData = Map();
-	pushData.put("data",dataList);
-	createResp = invokeurl
-	[
-		url :"https://www.zohoapis.in/crm/v8/Calls"
-		type :POST
-		parameters:pushData.toString()
-		connection:"get_conn"
-	];
-	respDataList = ifnull(createResp.get("data"),List());
-	callId = "";
-	apiStatus = "";
-	apiMessage = "";
-	apiDetails = Map();
-	if(respDataList.size() > 0)
-	{
-		firstRow = respDataList.get(0);
-		apiStatus = ifnull(firstRow.get("status"),"");
-		apiMessage = ifnull(firstRow.get("message"),"");
-		apiDetails = ifnull(firstRow.get("details"),Map());
-		callId = ifnull(apiDetails.get("id"),"");
-	}
-	if(apiStatus.toLowerCase() == "success" && callId != "")
-	{
-		respMap.put("status","success");
-		respMap.put("mode","create");
-		respMap.put("message","Call record created successfully");
-		respMap.put("call_id",callId);
-		respMap.put("related_type",relatedType);
-		respMap.put("related_source",relatedSource);
-		respMap.put("api_status",apiStatus);
-		respMap.put("api_message",apiMessage);
-		respMap.put("system_disposition",SystemDisposition);
-	}
-	else
-	{
-		respMap.put("status","error");
-		respMap.put("mode","create");
-		respMap.put("message","Failed to create call record: " + apiMessage);
-		respMap.put("api_status",apiStatus);
-		respMap.put("api_details",apiDetails);
-		respMap.put("raw_response",createResp);
-	}
-	return respMap.toString();
 }
-catch (err)
+// -------------------------------------------------------
+// PATH C: Still not found → create a new Lead
+// -------------------------------------------------------
+if(!found && mobile != "" && businessUnit != "")
 {
-	respMap.put("status","error");
-	respMap.put("message","Unhandled exception in function");
-	respMap.put("details",err.toString());
+	createPayload = Map();
+	createPayload.put("First_Name",callType);
+	createPayload.put("Last_Name",mobile.toString());
+	createPayload.put("Business_Unit",businessUnit);
+	createPayload.put("Mobile",mobile);
+	createPayload.put("Lead_Prospect_Source","Manual");
+	createPayload.put("Lead_Status","Open");
+	createPayload.put("Lead_Source",callType.toLowerCase());
+	if(ownerID != null)
+	{
+		createPayload.put("Owner",{"id":ownerID});
+	}
+	try 
+	{
+		createResp = zoho.crm.createRecord("Leads",createPayload,{"trigger":{"workflow"}});
+		recordId = createResp.get("id").toString();
+		entityType = "Lead";
+		found = true;
+		info "[PATH C] New Lead created → recordId: " + recordId;
+		try 
+		{
+			newLeadFetched = zoho.crm.getRecordById("Leads",recordId,{"connection":"get_conn"});
+			leadOwner = newLeadFetched.get("Owner");
+			if(leadOwner != null)
+			{
+				leadOwnerId = leadOwner.get("id").toString();
+				ownerResp = zoho.crm.getRecordById("users",leadOwnerId);
+				info ownerResp;
+				ownerEmailFound = ownerResp.get("users").getJSON("email");
+				info ownerEmailFound;
+			}
+			userTeam = ifnull(newLeadFetched.get("Team"),null);
+		}
+		catch (e)
+		{
+			info "[PATH C] Error fetching new lead details: " + e.toString();
+			ownerEmailFound = null;
+			userTeam = null;
+		}
+		recordUrl = "https://crmplus.zoho.in/motilaloswalamc/index.do/cxapp/crm/" + ORG_ID + "/tab/Leads/" + recordId + "/canvas/" + LEAD_CANVAS_ID;
+	}
+	catch (e)
+	{
+		info "[PATH C] Lead creation failed: " + e.toString();
+		err = Map();
+		err.put("code","error");
+		err.put("message","Lead creation failed");
+		err.put("details",{"error":e.toString(),"output_type":"string"});
+		return err.toString();
+	}
 }
-return respMap.toString();
+// --- Build response ---
+details.put("Module",entityType);
+details.put("lead_id",recordId);
+details.put("businessUnit",businessUnit);
+if(ownerEmailFound != "zoho.implmentation@motilaloswal.com" && ownerEmailFound != "amc.zoho@motilaloswal.com")
+{
+	details.put("ownerEmail",ownerEmailFound);
+}
+else
+{
+	details.put("ownerEmail",null);
+}
+details.put("userTeam",userTeam);
+details.put("leadUrl",recordUrl);
+ok = Map();
+if(found)
+{
+	ok.put("code","success");
+}
+else
+{
+	ok.put("code","not_found");
+	info "[RESPONSE] not_found → no record matched and no Lead created";
+}
+ok.put("details",details);
+return ok.toString();
 }
