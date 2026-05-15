@@ -1,0 +1,305 @@
+string standalone.CallRecordCreate(String crmAPIRequest)
+{
+respMap = Map();
+try 
+{
+	// =========================
+	// 1) Parse wrapper payload
+	// =========================
+	if(crmAPIRequest == null || crmAPIRequest == "")
+	{
+		respMap.put("status","error");
+		respMap.put("message","Empty request payload");
+		return respMap.toString();
+	}
+	reqdata = Map();
+	request_body = Map();
+	try 
+	{
+		reqdata = crmAPIRequest.toMap();
+	}
+	catch (e0)
+	{
+		respMap.put("status","error");
+		respMap.put("message","Invalid wrapper JSON");
+		respMap.put("details","toMap error: " + e0.toString());
+		return respMap.toString();
+	}
+	bodyRaw = reqdata.get("body");
+	if(bodyRaw == null)
+	{
+		respMap.put("status","error");
+		respMap.put("message","Missing 'body' in request");
+		return respMap.toString();
+	}
+	try 
+	{
+		request_body = bodyRaw.toMap();
+	}
+	catch (eBody)
+	{
+		respMap.put("status","error");
+		respMap.put("message","Invalid 'body' JSON");
+		respMap.put("details","body.toMap error: " + eBody.toString());
+		return respMap.toString();
+	}
+	// =========================
+	// 2) Extract fields
+	// =========================
+	StartTime = ifnull(request_body.get("StartTime"),"");
+	EndTime = ifnull(request_body.get("EndTime"),"");
+	domainID = ifnull(request_body.get("DomainId"),"");
+	SourceNumber = ifnull(request_body.get("SourceNumber"),"").trim();
+	DestinationNumber = ifnull(request_body.get("DestinationNumber"),"").trim();
+	CallDuration = ifnull(request_body.get("CallDuration"),"");
+	Status = ifnull(request_body.get("Status"),"");
+	ResourceURL = ifnull(request_body.get("ResourceURL"),"");
+	Direction = ifnull(request_body.get("Direction"),"");
+	CallNotes = ifnull(request_body.get("CallNotes"),"");
+	AgentName = ifnull(request_body.get("AgentName"),"");
+	OpportunityId = ifnull(request_body.get("OpportunityId"),"");
+	CampaignId = ifnull(request_body.get("campaign_id"),"");
+	CampaignName = ifnull(request_body.get("campaign_name"),"");
+	Custom10 = ifnull(request_body.get("mx_Custom_10"),"");
+	// =========================
+	// 3) Normalize phone numbers
+	// =========================
+	if(SourceNumber != "")
+	{
+		SourceNumber = SourceNumber.replaceAll("[^0-9]","");
+		if(SourceNumber.length() > 10)
+		{
+			SourceNumber = SourceNumber.right(10);
+		}
+	}
+	if(DestinationNumber != "")
+	{
+		DestinationNumber = DestinationNumber.replaceAll("[^0-9]","");
+		if(DestinationNumber.length() > 10)
+		{
+			DestinationNumber = DestinationNumber.right(10);
+		}
+	}
+	if(SourceNumber == "" && DestinationNumber == "")
+	{
+		respMap.put("status","error");
+		respMap.put("message","SourceNumber and DestinationNumber both empty after normalization");
+		return respMap.toString();
+	}
+	// =========================
+	// 4) Convert StartTime to ISO
+	// =========================
+	StartTimeISO = "";
+	try 
+	{
+		if(StartTime != "")
+		{
+			startDT = StartTime.toDateTime("yyyy-MM-dd HH:mm:ss");
+			StartTimeISO = startDT.toString("yyyy-MM-dd'T'HH:mm:ssXXX");
+		}
+	}
+	catch (e1)
+	{
+		// keep StartTimeISO empty
+	}
+	if(StartTimeISO == "")
+	{
+		respMap.put("status","error");
+		respMap.put("message","Invalid StartTime; unable to parse to ISO");
+		return respMap.toString();
+	}
+	// EndTime parse (optional; not used for match)
+	if(EndTime != "")
+	{
+		try 
+		{
+			endDT = EndTime.toDateTime("yyyy-MM-dd HH:mm:ss");
+		}
+		catch (e2)
+		{
+		}
+	}
+	// =========================
+	// 5) Resolve Who_Id / What_Id (via OpportunityId)
+	// =========================
+	WhoId = null;
+	WhatId = null;
+	callData = Map();
+	relatedType = "";
+	relatedSource = "";
+	if(OpportunityId != "")
+	{
+		oppIdStr = OpportunityId;
+		// Try Contact
+		try 
+		{
+			contactRec = zoho.crm.getRecordById("Contacts",oppIdStr.toLong());
+			if(contactRec != null && !contactRec.isEmpty())
+			{
+				WhoId = contactRec.getJSON("id");
+				callData.put("$se_module","Contacts");
+				relatedType = "Contact";
+				relatedSource = "OpportunityId";
+			}
+		}
+		catch (eC)
+		{
+		}
+		// If not Contact, try Lead
+		if(WhoId == null)
+		{
+			try 
+			{
+				leadRec = zoho.crm.getRecordById("Leads",oppIdStr.toLong());
+				if(leadRec != null && !leadRec.isEmpty())
+				{
+					WhatId = leadRec.getJSON("id");
+					callData.put("$se_module","Leads");
+					relatedType = "Lead";
+					relatedSource = "OpportunityId";
+				}
+			}
+			catch (eL)
+			{
+			}
+		}
+	}
+	// =========================
+	// 6) System_Disposition based on Call Duration
+	// =========================
+	callduration = CallDuration.toString();
+	SystemDisposition = "Not Connected";
+	if(CallDuration != "" && CallDuration != null)
+	{
+		if(Status.equalsIgnoreCase("Voice mail"))
+		{
+			SystemDisposition = "Not Connected";
+		}
+		durationStr = CallDuration.toString().trim();
+		if(durationStr.contains(":"))
+		{
+			durationParts = durationStr.toList(":");
+			totalSeconds = 0;
+			if(durationParts.size() == 3)
+			{
+				totalSeconds = durationParts.get(0).toLong() * 3600 + durationParts.get(1).toLong() * 60 + durationParts.get(2).toLong();
+			}
+			else if(durationParts.size() == 2)
+			{
+				totalSeconds = durationParts.get(0).toLong() * 60 + durationParts.get(1).toLong();
+			}
+			if(totalSeconds > 0)
+			{
+				SystemDisposition = "Connected";
+			}
+		}
+		else
+		{
+			// Plain numeric seconds
+			if(durationStr.toLong() > 0)
+			{
+				SystemDisposition = "Connected";
+			}
+		}
+	}
+	// =========================
+	// Override: If Call Status is "Not Connected", force SystemDisposition
+	// =========================
+	if(Status.equalsIgnoreCase("Not Connected"))
+	{
+		SystemDisposition = "Not Connected";
+	}
+	// =========================
+	// 7) Build Calls record data
+	// =========================
+	user = zoho.crm.searchRecords("users","(email:equals:" + AgentName + ")").get("users").get(0);
+	bu = user.get("Business_Unit");
+	callData.put("From_Number__s",SourceNumber);
+	callData.put("To_Number__s",DestinationNumber);
+	callData.put("Call_Type",Direction);
+	callData.put("Call_Start_Time",StartTimeISO);
+	callData.put("Agami_Call_Status",Status);
+	callData.put("Outgoing_Call_Status","Completed");
+	callData.put("Call_Duration",callduration);
+	callData.put("Voice_Recording__s",ResourceURL);
+	callData.put("Subject",Direction + " Call from " + SourceNumber);
+	callData.put("Campaign_Name",CampaignName);
+	callData.put("Description",Custom10);
+	callData.put("Call_uuid",domainID);
+	callData.put("Agami_Notes",CallNotes);
+	callData.put("Business_Unit",bu);
+	callData.put("Campaign_Id",CampaignId);
+	callData.put("System_Disposition",SystemDisposition);
+	if(AgentName != "")
+	{
+		userinfo = zoho.crm.searchRecords("users","(email:equals:" + AgentName + ")").get("users").get(0);
+		userid = userinfo.get("id");
+		callData.put("Owner",userid);
+	}
+	callData.put("Call_Source","Dialler");
+	if(WhoId != null)
+	{
+		callData.put("Who_Id",{"id":WhoId});
+	}
+	if(WhatId != null)
+	{
+		callData.put("What_Id",{"id":WhatId});
+	}
+	// =========================
+	// 8) CREATE Call record
+	// =========================
+	dataList = List();
+	dataList.add(callData);
+	pushData = Map();
+	pushData.put("data",dataList);
+	createResp = invokeurl
+	[
+		url :"https://www.zohoapis.in/crm/v8/Calls"
+		type :POST
+		parameters:pushData.toString()
+		connection:"get_conn"
+	];
+	respDataList = ifnull(createResp.get("data"),List());
+	callId = "";
+	apiStatus = "";
+	apiMessage = "";
+	apiDetails = Map();
+	if(respDataList.size() > 0)
+	{
+		firstRow = respDataList.get(0);
+		apiStatus = ifnull(firstRow.get("status"),"");
+		apiMessage = ifnull(firstRow.get("message"),"");
+		apiDetails = ifnull(firstRow.get("details"),Map());
+		callId = ifnull(apiDetails.get("id"),"");
+	}
+	if(apiStatus.toLowerCase() == "success" && callId != "")
+	{
+		respMap.put("status","success");
+		respMap.put("mode","create");
+		respMap.put("message","Call record created successfully");
+		respMap.put("call_id",callId);
+		respMap.put("related_type",relatedType);
+		respMap.put("related_source",relatedSource);
+		respMap.put("api_status",apiStatus);
+		respMap.put("api_message",apiMessage);
+		respMap.put("system_disposition",SystemDisposition);
+	}
+	else
+	{
+		respMap.put("status","error");
+		respMap.put("mode","create");
+		respMap.put("message","Failed to create call record: " + apiMessage);
+		respMap.put("api_status",apiStatus);
+		respMap.put("api_details",apiDetails);
+		respMap.put("raw_response",createResp);
+	}
+	return respMap.toString();
+}
+catch (err)
+{
+	respMap.put("status","error");
+	respMap.put("message","Unhandled exception in function");
+	respMap.put("details",err.toString());
+}
+return respMap.toString();
+}
