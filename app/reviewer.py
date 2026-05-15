@@ -10,7 +10,15 @@ load_dotenv(dotenv_path=env_path)
 # API Key
 api_key = os.getenv("GROQ_API_KEY")
 
-print("Loaded Groq API Key:", api_key)
+# Validate API Key
+if not api_key:
+    raise ValueError(
+        "❌ GROQ_API_KEY not found in .env file.\n"
+        "Please create a .env file in the project root.\n"
+        "See .env.example for the required format."
+    )
+
+print("✓ Groq API Key loaded successfully")
 
 # Client
 client = Groq(api_key=api_key)
